@@ -31,7 +31,7 @@ async function loadGeoid2011(){
 async function loadGeoid2024(){
   if(geoidData2024)return geoidData2024;
   try{
-    const r=await fetch('./JPGEO2024.isg');
+    const r=await fetch('./JPGEO2024+Hrefconv2024.isg');
     if(!r.ok)throw new Error('fetch failed');
     const text=await r.text();
     const lines=text.trim().split(/\r?\n/);
