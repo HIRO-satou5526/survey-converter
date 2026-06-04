@@ -1,8 +1,107 @@
-﻿const ZONES=[[1,33,129.5],[2,33,131],[3,36,132+10/60],[4,33,133.5],[5,36,134+20/60],[6,36,136],[7,36,137+10/60],[8,36,138.5],[9,36,139+50/60],[10,40,140+50/60],[11,44,140+15/60],[12,44,142+15/60],[13,44,144+15/60],[14,26,142],[15,26,127.5],[16,26,124],[17,26,131],[18,20,136],[19,26,154]];
+const ZONES=[[1,33,129.5],[2,33,131],[3,36,132+10/60],[4,33,133.5],[5,36,134+20/60],[6,36,136],[7,36,137+10/60],[8,36,138.5],[9,36,139+50/60],[10,40,140+50/60],[11,44,140+15/60],[12,44,142+15/60],[13,44,144+15/60],[14,26,142],[15,26,127.5],[16,26,124],[17,26,131],[18,20,136],[19,26,154]];
 const GSI={g2011:"https://vldb.gsi.go.jp/sokuchi/surveycalc/geoid/calcgh2011/cgi/geoidcalc.pl",g2024:"https://vldb.gsi.go.jp/sokuchi/surveycalc/geoid/calcgh/cgi/geoidcalc.pl"};
 const LS={geo:"survey.geoid.cache.v1",fav:"survey.favorites.v1",last:"survey.last.result.v1"};
 const $=id=>document.getElementById(id);let lastResult=null,lastCsv="";
-window.addEventListener("DOMContentLoaded",()=>{initZones();bindTabs();bindForm();bindCsv();bindFavorites();loadFavorites();setStatus(navigator.onLine?"オンライン":"オフライン");if("serviceWorker"in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>setStatus("SW失敗"));window.addEventListener("online",()=>setStatus("オンライン"));window.addEventListener("offline",()=>setStatus("オフライン"));});
+
+// ジオイドデータキャッシュ
+let geoidData2011=null, geoidData2024=null;
+
+// ASCファイル（ジオイド2011）を読み込んでパース
+async function loadGeoid2011(){
+  if(geoidData2011)return geoidData2011;
+  try{
+    const r=await fetch('./gsigeo2011_ver2_2.asc');
+    if(!r.ok)throw new Error();
+    const text=await r.text();
+    const lines=text.trim().split(/\r?\n/);
+    // ヘッダー行: lat_start lon_start lat_end lon_end dlat dlon nrows ncols
+    const h=lines[0].trim().split(/\s+/).map(Number);
+    const lat0=h[0],lon0=h[1],dlat=h[4],dlon=h[5],nrows=h[6],ncols=h[7];
+    const data=[];
+    for(let i=1;i<lines.length;i++){
+      const vals=lines[i].trim().split(/\s+/).map(Number);
+      for(const v of vals)data.push(v);
+    }
+    geoidData2011={lat0,lon0,dlat,dlon,nrows,ncols,data};
+    return geoidData2011;
+  }catch{return null;}
+}
+
+// ISGファイル（ジオイド2024）を読み込んでパース
+async function loadGeoid2024(){
+  if(geoidData2024)return geoidData2024;
+  try{
+    const r=await fetch('./JPGEO2024.isg');
+    if(!r.ok)throw new Error();
+    const text=await r.text();
+    const lines=text.trim().split(/\r?\n/);
+    // ISGヘッダーをスキップしてデータ部分を取得
+    let dataStart=0;
+    for(let i=0;i<lines.length;i++){
+      if(lines[i].trim().toLowerCase().startsWith('end_of_head')){dataStart=i+1;break;}
+    }
+    // ヘッダーから格子情報を取得
+    let lat0=20,lon0=120,dlat=1,dlon=1,nrows=30,ncols=30;
+    for(let i=0;i<dataStart;i++){
+      const l=lines[i].toLowerCase();
+      if(l.includes('lat min'))lat0=parseFloat(lines[i].split(':')[1]);
+      else if(l.includes('lon min'))lon0=parseFloat(lines[i].split(':')[1]);
+      else if(l.includes('delta lat'))dlat=parseFloat(lines[i].split(':')[1]);
+      else if(l.includes('delta lon'))dlon=parseFloat(lines[i].split(':')[1]);
+      else if(l.includes('nrows'))nrows=parseInt(lines[i].split(':')[1]);
+      else if(l.includes('ncols'))ncols=parseInt(lines[i].split(':')[1]);
+    }
+    const data=[];
+    for(let i=dataStart;i<lines.length;i++){
+      const vals=lines[i].trim().split(/\s+/).map(Number);
+      for(const v of vals)if(!isNaN(v))data.push(v);
+    }
+    geoidData2024={lat0,lon0,dlat,dlon,nrows,ncols,data};
+    return geoidData2024;
+  }catch{return null;}
+}
+
+// 双線形補間でジオイド高を計算
+function interpolateGeoid(gd,lat,lon){
+  if(!gd)return NaN;
+  const {lat0,lon0,dlat,dlon,nrows,ncols,data}=gd;
+  const ri=(lat-lat0)/dlat;
+  const ci=(lon-lon0)/dlon;
+  if(ri<0||ri>nrows-1||ci<0||ci>ncols-1)return NaN;
+  const r0=Math.floor(ri),c0=Math.floor(ci);
+  const r1=Math.min(r0+1,nrows-1),c1=Math.min(c0+1,ncols-1);
+  const dr=ri-r0,dc=ci-c0;
+  const idx=(r,c)=>r*ncols+c;
+  const v00=data[idx(r0,c0)],v01=data[idx(r0,c1)];
+  const v10=data[idx(r1,c0)],v11=data[idx(r1,c1)];
+  if([v00,v01,v10,v11].some(v=>v===9999||v===-9999||isNaN(v)))return NaN;
+  return v00*(1-dr)*(1-dc)+v01*(1-dr)*dc+v10*dr*(1-dc)+v11*dr*dc;
+}
+
+async function offlineGeoid(model,lat,lon){
+  if(model==='g2011'){
+    const gd=await loadGeoid2011();
+    return interpolateGeoid(gd,lat,lon);
+  }else{
+    const gd=await loadGeoid2024();
+    return interpolateGeoid(gd,lat,lon);
+  }
+}
+
+window.addEventListener("DOMContentLoaded",()=>{
+  initZones();bindTabs();bindForm();bindCsv();bindFavorites();loadFavorites();
+  setStatus(navigator.onLine?"オンライン":"オフライン");
+  if("serviceWorker"in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>setStatus("SW失敗"));
+  window.addEventListener("online",()=>setStatus("オンライン"));
+  window.addEventListener("offline",()=>setStatus("オフライン"));
+  // バックグラウンドでジオイドデータを先読み
+  setStatus('ジオイドデータ読込中');
+  Promise.all([loadGeoid2011(),loadGeoid2024()]).then(([g1,g2])=>{
+    if(g1&&g2)setStatus('準備完了');
+    else if(g1)setStatus('2011読込済（2024失敗）');
+    else setStatus(navigator.onLine?'オンライン':'オフライン');
+  });
+});
 function initZones(){for(const[z,lat,lon]of ZONES){const o=document.createElement("option");o.value=z;o.textContent=`第${z}系（${lat}°, ${trim(lon)}°）`;$('zone').append(o)}$('zone').value="9"}
 function bindTabs(){document.querySelectorAll('.tab').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab,.panel').forEach(e=>e.classList.remove('active'));b.classList.add('active');$(b.dataset.tab).classList.add('active')}))}
 function bindForm(){document.querySelectorAll('input[name="mode"]').forEach(r=>r.addEventListener('change',syncMode));$('convertForm').addEventListener('submit',async e=>{e.preventDefault();await runSingle()});$('gpsBtn').addEventListener('click',useGps);$('copyAllBtn').addEventListener('click',()=>copyText(formatResultText(lastResult)));$('saveFavoriteBtn').addEventListener('click',saveFavorite);syncMode()}
@@ -14,10 +113,26 @@ function readInput(){const mode=getMode(),zone=num($('zone').value,'系番号'),
 async function convertPoint(p){const ll=p.mode==='xy2ll'?xyToLatLon(p.zone,p.x,p.y):{latitude:p.lat,longitude:p.lon};const xy=p.mode==='ll2xy'?latLonToXy(p.zone,p.lat,p.lon):{x:p.x,y:p.y};const geoid=await getGeoidPair(ll.latitude,ll.longitude);const h=calcHeights(p.heightType,p.heightValue,geoid);return{zone:p.zone,datum:$('datum')?.value||'JGD2011',latitude:ll.latitude,longitude:ll.longitude,x:xy.x,y:xy.y,geoid2011:geoid.g2011,geoid2024:geoid.g2024,...h,source:geoid.source}}
 function calcHeights(type,value,g){let ellipsoid,h2011,h2024;if(type==='h2011'){h2011=value;ellipsoid=value+g.g2011;h2024=ellipsoid-g.g2024}else if(type==='h2024'){h2024=value;ellipsoid=value+g.g2024;h2011=ellipsoid-g.g2011}else{ellipsoid=value;h2011=value-g.g2011;h2024=value-g.g2024}return{ellipsoidHeight:ellipsoid,height2011:h2011,height2024:h2024}}
 async function getGeoidPair(lat,lon){const [g2011,g2024]=await Promise.all([getGeoid('g2011',lat,lon),getGeoid('g2024',lat,lon)]);return{g2011:g2011.height,g2024:g2024.height,source:g2011.source==='online'||g2024.source==='online'?'online':g2011.source}}
-async function getGeoid(model,lat,lon){const key=`${model}:${lat.toFixed(5)},${lon.toFixed(5)}`;const cache=readJson(LS.geo,{});if(cache[key])return{height:cache[key],source:'cache'};const offline=offlineGeoid(model,lat,lon);if(Number.isFinite(offline)){cache[key]=offline;writeJson(LS.geo,cache);return{height:offline,source:'offline'}}if(!navigator.onLine)throw new Error('ジオイド高のキャッシュがありません。オンライン時に一度計算してください。');try{const r=await fetch(buildGeoidUrl(model,lat,lon),{mode:'cors'});if(!r.ok)throw new Error();const data=await r.json();const v=Number(data.OutputData?.geoidHeight??data.geoidHeight);if(!Number.isFinite(v))throw new Error();cache[key]=v;writeJson(LS.geo,cache);return{height:v,source:geoidProxyUrl()?'proxy':'online'}}catch{const hint=geoidProxyUrl()?'中継APIからジオイド高を取得できません。中継APIのURLと公開状態を確認してください。':'国土地理院APIはGitHub Pagesから直接読むとCORSで失敗します。config.js の geoidProxy に中継API URLを設定してください。';throw new Error(hint)}}
+async function getGeoid(model,lat,lon){
+  const key=`${model}:${lat.toFixed(5)},${lon.toFixed(5)}`;
+  const cache=readJson(LS.geo,{});
+  if(cache[key])return{height:cache[key],source:'cache'};
+  const offline=await offlineGeoid(model,lat,lon);
+  if(Number.isFinite(offline)){cache[key]=offline;writeJson(LS.geo,cache);return{height:offline,source:'offline'};}
+  if(!navigator.onLine)throw new Error('ジオイド高のキャッシュがありません。オンライン時に一度計算してください。');
+  try{
+    const r=await fetch(buildGeoidUrl(model,lat,lon),{mode:'cors'});
+    if(!r.ok)throw new Error();
+    const data=await r.json();
+    const v=Number(data.OutputData?.geoidHeight??data.geoidHeight);
+    if(!Number.isFinite(v))throw new Error();
+    cache[key]=v;writeJson(LS.geo,cache);return{height:v,source:'online'};
+  }catch{
+    throw new Error('ジオイド高を取得できません。ジオイドデータファイルが読み込まれているか確認してください。');
+  }
+}
 function buildGeoidUrl(model,lat,lon){const proxy=geoidProxyUrl();const qs=new URLSearchParams({model,latitude:lat.toFixed(8),longitude:lon.toFixed(8)});if(proxy)return `${proxy.replace(/\/$/,'')}?${qs}`;const directQs=new URLSearchParams({outputType:'json',latitude:lat.toFixed(8),longitude:lon.toFixed(8)});return `${GSI[model]}?${directQs}`}
 function geoidProxyUrl(){return (window.SURVEY_CONFIG?.geoidProxy||'').trim()}
-function offlineGeoid(){return NaN}
 function xyToLatLon(zoneId,x,y){const zone=ZONES.find(v=>v[0]===Number(zoneId));if(!zone)throw new Error('系番号を選択してください');const[,lat0Deg,lon0Deg]=zone,a=6378137,invF=298.257222101,m0=.9999,n=1/(2*invF-1),lat0=rad(lat0Deg),lon0=rad(lon0Deg),aBar=m0*a/(1+n)*(1+n**2/4+n**4/64),s0=meridian(lat0,a,n,m0),xi=(x+s0)/aBar,eta=y/aBar,b=[0,n/2-2*n**2/3+37*n**3/96-n**4/360-81*n**5/512,n**2/48+n**3/15-437*n**4/1440+46*n**5/105,17*n**3/480-37*n**4/840-209*n**5/4480,4397*n**4/161280-11*n**5/504,4583*n**5/161280];let xp=xi,ep=eta;for(let j=1;j<=5;j++){xp-=b[j]*Math.sin(2*j*xi)*cosh(2*j*eta);ep-=b[j]*Math.cos(2*j*xi)*sinh(2*j*eta)}const chi=Math.asin(Math.sin(xp)/cosh(ep)),d=[0,2*n-2*n**2/3-2*n**3+116*n**4/45+26*n**5/45,7*n**2/3-8*n**3/5-227*n**4/45+2704*n**5/315,56*n**3/15-136*n**4/35-1262*n**5/105,4279*n**4/630-332*n**5/35,4174*n**5/315];let lat=chi;for(let j=1;j<=5;j++)lat+=d[j]*Math.sin(2*j*chi);return{latitude:deg(lat),longitude:deg(lon0+Math.atan2(sinh(ep),Math.cos(xp)))}}
 function latLonToXy(zoneId,latDeg,lonDeg){const zone=ZONES.find(v=>v[0]===Number(zoneId));if(!zone)throw new Error('系番号を選択してください');const[,lat0Deg,lon0Deg]=zone,a=6378137,invF=298.257222101,m0=.9999,n=1/(2*invF-1),lat=rad(latDeg),lon=rad(lonDeg),lat0=rad(lat0Deg),lon0=rad(lon0Deg),e2=(2*invF-1)/(invF**2),w=Math.sqrt(1-e2*Math.sin(lat)**2),t=Math.sinh(atanh(Math.sin(lat))-2*Math.sqrt(n)/(1+n)*atanh(2*Math.sqrt(n)/(1+n)*Math.sin(lat))),xi=Math.atan(t/Math.cos(lon-lon0)),eta=atanh(Math.sin(lon-lon0)/Math.sqrt(1+t*t)),alpha=[0,n/2-2*n**2/3+5*n**3/16+41*n**4/180-127*n**5/288,n**2/48+n**3/15-437*n**4/1440+46*n**5/105,17*n**3/480-37*n**4/840-209*n**5/4480,4397*n**4/161280-11*n**5/504,4583*n**5/161280],aBar=m0*a/(1+n)*(1+n**2/4+n**4/64);let xip=xi,etap=eta;for(let j=1;j<=5;j++){xip+=alpha[j]*Math.sin(2*j*xi)*cosh(2*j*eta);etap+=alpha[j]*Math.cos(2*j*xi)*sinh(2*j*eta)}return{x:aBar*xip-meridian(lat0,a,n,m0),y:aBar*etap}}
 function meridian(phi,a,n,m0){const c=[1+n**2/4+n**4/64,-3/2*(n-n**3/8-n**5/64),15/16*(n**2-n**4/4),-35/48*(n**3-5*n**5/16),315*n**4/512,-693*n**5/1280];let s=c[0]*phi;for(let j=1;j<=5;j++)s+=c[j]*Math.sin(2*j*phi);return m0*a/(1+n)*s}
@@ -26,13 +141,25 @@ function rowEl(k,v){const d=document.createElement('div');d.className='row';d.in
 function noteEl(t){const d=document.createElement('div');d.className='info';d.textContent=t;return d}
 function showError(msg){$('resultList').className='resultList empty';$('resultList').textContent=msg}
 async function useGps(){if(!navigator.geolocation){showError('この端末では現在地取得を利用できません');return}setStatus('GPS取得中');navigator.geolocation.getCurrentPosition(async p=>{document.querySelector('input[name="mode"][value="ll2xy"]').checked=true;syncMode();$('lat').value=p.coords.latitude.toFixed(8);$('lon').value=p.coords.longitude.toFixed(8);if(Number.isFinite(p.coords.altitude)){$('heightType').value='ellipsoid';$('heightValue').value=p.coords.altitude.toFixed(3)}await runSingle()},e=>{showError(`現在地を取得できません: ${e.message}`);setStatus('要確認')},{enableHighAccuracy:true,timeout:15000,maximumAge:0})}
-async function runCsv(){try{setStatus('CSV計算中');const pattern=$('csvPattern').value,lines=$('csvInput').value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),out=[csvHeader()];for(const line of lines){const a=line.split(',').map(s=>s.trim());if(a.length<3)continue;const p=csvToPoint(pattern,a);const r=await convertPoint(p);out.push(csvLine(r))}lastCsv=out.join('\n');$('csvOutput').value=lastCsv;setStatus('完了')}catch(e){$('csvOutput').value=e.message;setStatus('要確認')}} 
+async function runCsv(){try{setStatus('CSV計算中');const pattern=$('csvPattern').value,lines=$('csvInput').value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean),out=[csvHeader()];for(const line of lines){const a=line.split(',').map(s=>s.trim());if(a.length<3)continue;const p=csvToPoint(pattern,a);const r=await convertPoint(p);out.push(csvLine(r))}lastCsv=out.join('\n');$('csvOutput').value=lastCsv;setStatus('完了')}catch(e){$('csvOutput').value=e.message;setStatus('要確認')}}
 function csvToPoint(pattern,a){const isXy=pattern.startsWith('xy'),type=pattern.includes('h2011')?'h2011':pattern.includes('h2024')?'h2024':'ellipsoid',heightValue=Number(a[2]),zone=Number($('zone').value);return isXy?{mode:'xy2ll',zone,x:Number(a[0]),y:Number(a[1]),heightType:type,heightValue}:{mode:'ll2xy',zone,lat:Number(a[0]),lon:Number(a[1]),heightType:type,heightValue}}
 function csvHeader(){return '緯度,経度,X,Y,楕円体高,ジオイド高2011,ジオイド高2024,標高(JGD2011),標高(JGD2024)'}
 function csvLine(r){return [fmt(r.latitude,8),fmt(r.longitude,8),fmt(r.x,3),fmt(r.y,3),fmt(r.ellipsoidHeight,3),fmt(r.geoid2011,3),fmt(r.geoid2024,3),fmt(r.height2011,3),fmt(r.height2024,3)].join(',')}
 function downloadCsv(){if(!lastCsv)return;const blob=new Blob(['\ufeff'+lastCsv],{type:'text/csv'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='survey-converted.csv';a.click();URL.revokeObjectURL(a.href)}
 function saveFavorite(){if(!lastResult){showError('先に変換してください');return}const name=$('pointName').value.trim()||`地点 ${new Date().toLocaleString()}`,list=readJson(LS.fav,[]);list.unshift({name,created:new Date().toISOString(),...lastResult});writeJson(LS.fav,list.slice(0,100));loadFavorites();setStatus('保存済')}
 function loadFavorites(){const box=$('favoriteList');if(!box)return;const list=readJson(LS.fav,[]);box.innerHTML='';if(!list.length){box.append(noteEl('保存地点はありません'));return}for(const f of list){const c=document.createElement('div');c.className='card';c.innerHTML=`<h3>${escapeHtml(f.name)}</h3><div>緯度 ${fmt(f.latitude,8)} / 経度 ${fmt(f.longitude,8)}</div><div>X ${fmt(f.x,3)} / Y ${fmt(f.y,3)}</div><div>楕円体高 ${fmt(f.ellipsoidHeight,3)} m</div>`;const b=document.createElement('button');b.textContent='結果へ表示';b.onclick=()=>{lastResult=f;renderResult(f);document.querySelector('[data-tab="convert"]').click()};c.append(b);box.append(c)}}
-function formatResultText(r){return r?csvHeader()+'\n'+csvLine(r):''}function copyText(t){if(!t)return;navigator.clipboard?.writeText(t).then(()=>setStatus('コピー済')).catch(()=>setStatus('コピー不可'))}
-function num(v,name){const n=Number(v);if(!Number.isFinite(n))throw new Error(`${name}を数値で入力してください`);return n}function getMode(){return document.querySelector('input[name="mode"]:checked').value}function fmt(v,d){return Number(v).toFixed(d)}function trim(v){return Number(v).toFixed(6).replace(/0+$/,'').replace(/\.$/,'')}function rad(d){return d*Math.PI/180}function deg(r){return r*180/Math.PI}function sinh(v){return(Math.exp(v)-Math.exp(-v))/2}function cosh(v){return(Math.exp(v)+Math.exp(-v))/2}function atanh(v){return .5*Math.log((1+v)/(1-v))}function setStatus(t){$('appStatus').textContent=t}function readJson(k,f){try{return JSON.parse(localStorage.getItem(k))??f}catch{return f}}function writeJson(k,v){localStorage.setItem(k,JSON.stringify(v))}function escapeHtml(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-
+function formatResultText(r){return r?csvHeader()+'\n'+csvLine(r):''}
+function copyText(t){if(!t)return;navigator.clipboard?.writeText(t).then(()=>setStatus('コピー済')).catch(()=>setStatus('コピー不可'))}
+function num(v,name){const n=Number(v);if(!Number.isFinite(n))throw new Error(`${name}を数値で入力してください`);return n}
+function getMode(){return document.querySelector('input[name="mode"]:checked').value}
+function fmt(v,d){return Number(v).toFixed(d)}
+function trim(v){return Number(v).toFixed(6).replace(/0+$/,'').replace(/\.$/,'')}
+function rad(d){return d*Math.PI/180}
+function deg(r){return r*180/Math.PI}
+function sinh(v){return(Math.exp(v)-Math.exp(-v))/2}
+function cosh(v){return(Math.exp(v)+Math.exp(-v))/2}
+function atanh(v){return .5*Math.log((1+v)/(1-v))}
+function setStatus(t){$('appStatus').textContent=t}
+function readJson(k,f){try{return JSON.parse(localStorage.getItem(k))??f}catch{return f}}
+function writeJson(k,v){localStorage.setItem(k,JSON.stringify(v))}
+function escapeHtml(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
