@@ -81,8 +81,15 @@ function interpolateGeoid(gd,lat,lon){
   const idx=(r,c)=>r*ncols+c;
   const v00=data[idx(r0,c0)],v01=data[idx(r0,c1)];
   const v10=data[idx(r1,c0)],v11=data[idx(r1,c1)];
-  if([v00,v01,v10,v11].some(v=>Math.abs(v)>=999||isNaN(v)))return NaN;
-  return v00*(1-dr)*(1-dc)+v01*(1-dr)*dc+v10*dr*(1-dc)+v11*dr*dc;
+  const valid=v=>!isNaN(v)&&Math.abs(v)<999;
+  if(![v00,v01,v10,v11].some(valid))return NaN;
+  const fill=(...args)=>args.find(valid)??NaN;
+  const f00=valid(v00)?v00:fill(v01,v10,v11);
+  const f01=valid(v01)?v01:fill(v00,v11,v10);
+  const f10=valid(v10)?v10:fill(v00,v11,v01);
+  const f11=valid(v11)?v11:fill(v01,v10,v00);
+  if([f00,f01,f10,f11].some(v=>isNaN(v)))return NaN;
+  return f00*(1-dr)*(1-dc)+f01*(1-dr)*dc+f10*dr*(1-dc)+f11*dr*dc;
 }
 
 async function offlineGeoid(model,lat,lon){
