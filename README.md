@@ -79,6 +79,43 @@ PWA本体はService Workerでキャッシュされ、オフライン起動でき
 2. LocalStorageに保存済みの取得キャッシュ
 3. 国土地理院公開サービス
 
+
+## ジオイド高取得エラーの原因と解決
+
+GitHub Pagesは静的サイトのため、ブラウザ内のJavaScriptから国土地理院のジオイド高計算APIを直接 `fetch()` すると、CORS制限によりレスポンスを読めない場合があります。国土地理院API自体は値を返しますが、ブラウザが別ドメインの読み取りを止めるためです。
+
+解決方法は中継APIを使うことです。このフォルダにはCloudflare Workers用の `geoid-worker.js` を同梱しています。
+
+### Cloudflare Workersでの設定
+
+1. Cloudflare Workersで新しいWorkerを作成します。
+2. `geoid-worker.js` の内容を貼り付けてデプロイします。
+3. 発行されたURLを控えます。例: `https://survey-geoid.example.workers.dev`
+4. `config.js` を開き、以下のように設定します。
+
+```js
+window.SURVEY_CONFIG = {
+  geoidProxy: "https://survey-geoid.example.workers.dev"
+};
+```
+
+これでGitHub Pages上のPWAから、Worker経由でジオイド2011/2024を取得できます。
+
+### ローカル確認
+
+PC上で確認する場合は、同梱の `server.js` を使えます。
+
+```bash
+node server.js
+```
+
+その場合は `config.js` を一時的に以下へ変更します。
+
+```js
+window.SURVEY_CONFIG = {
+  geoidProxy: "./api/geoid"
+};
+```
 ## 制限事項
 
 GitHub Pagesは静的ホスティングのため、国土地理院APIがブラウザのCORS制限を受ける環境ではオンライン取得に失敗する場合があります。その場合は、ジオイド2011/2024の格子データをアプリに同梱するか、同一オリジンの中継APIを利用してください。
@@ -93,3 +130,4 @@ GitHub Pagesは静的ホスティングのため、国土地理院APIがブラ�
 - `manifest.webmanifest`
 - `sw.js`
 - `README.md`
+
