@@ -3,67 +3,65 @@ const GSI={g2011:"https://vldb.gsi.go.jp/sokuchi/surveycalc/geoid/calcgh2011/cgi
 const LS={geo:"survey.geoid.cache.v1",fav:"survey.favorites.v1",last:"survey.last.result.v1"};
 const $=id=>document.getElementById(id);let lastResult=null,lastCsv="";
 
-// ジオイドデータキャッシュ
-let geoidData2011=null, geoidData2024=null;
+let geoidData2011=null,geoidData2024=null;
 
-// ASCファイル（ジオイド2011）を読み込んでパース
+// ASCファイル（ジオイド2011）パース
+// ヘッダー: lat0 lon0 dlat dlon nrows ncols 1 ver2.2
 async function loadGeoid2011(){
   if(geoidData2011)return geoidData2011;
   try{
     const r=await fetch('./gsigeo2011_ver2_2.asc');
-    if(!r.ok)throw new Error();
+    if(!r.ok)throw new Error('fetch failed');
     const text=await r.text();
     const lines=text.trim().split(/\r?\n/);
-    // ヘッダー行: lat_start lon_start lat_end lon_end dlat dlon nrows ncols
-    const h=lines[0].trim().split(/\s+/).map(Number);
-    const lat0=h[0],lon0=h[1],dlat=h[4],dlon=h[5],nrows=h[6],ncols=h[7];
+    const h=lines[0].trim().split(/\s+/);
+    const lat0=parseFloat(h[0]),lon0=parseFloat(h[1]),dlat=parseFloat(h[2]),dlon=parseFloat(h[3]),nrows=parseInt(h[4]),ncols=parseInt(h[5]);
     const data=[];
     for(let i=1;i<lines.length;i++){
-      const vals=lines[i].trim().split(/\s+/).map(Number);
-      for(const v of vals)data.push(v);
+      const vals=lines[i].trim().split(/\s+/);
+      for(const v of vals){const n=parseFloat(v);data.push(n);}
     }
     geoidData2011={lat0,lon0,dlat,dlon,nrows,ncols,data};
+    console.log('Geoid2011 loaded:',lat0,lon0,dlat,dlon,nrows,ncols,'points:',data.length);
     return geoidData2011;
-  }catch{return null;}
+  }catch(e){console.error('loadGeoid2011 error:',e);return null;}
 }
 
-// ISGファイル（ジオイド2024）を読み込んでパース
+// ISGファイル（ジオイド2024）パース
 async function loadGeoid2024(){
   if(geoidData2024)return geoidData2024;
   try{
     const r=await fetch('./JPGEO2024.isg');
-    if(!r.ok)throw new Error();
+    if(!r.ok)throw new Error('fetch failed');
     const text=await r.text();
     const lines=text.trim().split(/\r?\n/);
-    // ISGヘッダーをスキップしてデータ部分を取得
-    let dataStart=0;
+    let dataStart=0,lat0=20,lon0=120,lat1=50,lon1=150,dlat=0.016667,dlon=0.025,nrows=1801,ncols=1201;
     for(let i=0;i<lines.length;i++){
-      if(lines[i].trim().toLowerCase().startsWith('end_of_head')){dataStart=i+1;break;}
-    }
-    // ヘッダーから格子情報を取得
-    let lat0=20,lon0=120,dlat=1,dlon=1,nrows=30,ncols=30;
-    for(let i=0;i<dataStart;i++){
-      const l=lines[i].toLowerCase();
-      if(l.includes('lat min'))lat0=parseFloat(lines[i].split(':')[1]);
-      else if(l.includes('lon min'))lon0=parseFloat(lines[i].split(':')[1]);
-      else if(l.includes('delta lat'))dlat=parseFloat(lines[i].split(':')[1]);
-      else if(l.includes('delta lon'))dlon=parseFloat(lines[i].split(':')[1]);
-      else if(l.includes('nrows'))nrows=parseInt(lines[i].split(':')[1]);
-      else if(l.includes('ncols'))ncols=parseInt(lines[i].split(':')[1]);
+      const l=lines[i];
+      if(/end_of_head/i.test(l)){dataStart=i+1;break;}
+      const kv=l.split(':');
+      if(kv.length<2)continue;
+      const key=kv[0].trim().toLowerCase(),val=kv[1].trim();
+      if(key.includes('lat min')||key==='lat. min.')lat0=parseFloat(val);
+      else if(key.includes('lon min')||key==='lon. min.')lon0=parseFloat(val);
+      else if(key.includes('delta lat')||key==='delta lat.')dlat=parseFloat(val);
+      else if(key.includes('delta lon')||key==='delta lon.')dlon=parseFloat(val);
+      else if(key==='nrows')nrows=parseInt(val);
+      else if(key==='ncols')ncols=parseInt(val);
     }
     const data=[];
     for(let i=dataStart;i<lines.length;i++){
-      const vals=lines[i].trim().split(/\s+/).map(Number);
-      for(const v of vals)if(!isNaN(v))data.push(v);
+      const vals=lines[i].trim().split(/\s+/);
+      for(const v of vals){if(v!=='')data.push(parseFloat(v));}
     }
     geoidData2024={lat0,lon0,dlat,dlon,nrows,ncols,data};
+    console.log('Geoid2024 loaded:',lat0,lon0,dlat,dlon,nrows,ncols,'points:',data.length);
     return geoidData2024;
-  }catch{return null;}
+  }catch(e){console.error('loadGeoid2024 error:',e);return null;}
 }
 
-// 双線形補間でジオイド高を計算
 function interpolateGeoid(gd,lat,lon){
-  if(!gd)return NaN;
+  if(!gd||!gd.data||gd.data.length===0)return NaN;
   const {lat0,lon0,dlat,dlon,nrows,ncols,data}=gd;
   const ri=(lat-lat0)/dlat;
   const ci=(lon-lon0)/dlon;
@@ -74,7 +72,7 @@ function interpolateGeoid(gd,lat,lon){
   const idx=(r,c)=>r*ncols+c;
   const v00=data[idx(r0,c0)],v01=data[idx(r0,c1)];
   const v10=data[idx(r1,c0)],v11=data[idx(r1,c1)];
-  if([v00,v01,v10,v11].some(v=>v===9999||v===-9999||isNaN(v)))return NaN;
+  if([v00,v01,v10,v11].some(v=>Math.abs(v)>=999||isNaN(v)))return NaN;
   return v00*(1-dr)*(1-dc)+v01*(1-dr)*dc+v10*dr*(1-dc)+v11*dr*dc;
 }
 
@@ -94,11 +92,11 @@ window.addEventListener("DOMContentLoaded",()=>{
   if("serviceWorker"in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>setStatus("SW失敗"));
   window.addEventListener("online",()=>setStatus("オンライン"));
   window.addEventListener("offline",()=>setStatus("オフライン"));
-  // バックグラウンドでジオイドデータを先読み
   setStatus('ジオイドデータ読込中');
   Promise.all([loadGeoid2011(),loadGeoid2024()]).then(([g1,g2])=>{
     if(g1&&g2)setStatus('準備完了');
-    else if(g1)setStatus('2011読込済（2024失敗）');
+    else if(g1)setStatus('2011のみ読込済');
+    else if(g2)setStatus('2024のみ読込済');
     else setStatus(navigator.onLine?'オンライン':'オフライン');
   });
 });
@@ -119,17 +117,7 @@ async function getGeoid(model,lat,lon){
   if(cache[key])return{height:cache[key],source:'cache'};
   const offline=await offlineGeoid(model,lat,lon);
   if(Number.isFinite(offline)){cache[key]=offline;writeJson(LS.geo,cache);return{height:offline,source:'offline'};}
-  if(!navigator.onLine)throw new Error('ジオイド高のキャッシュがありません。オンライン時に一度計算してください。');
-  try{
-    const r=await fetch(buildGeoidUrl(model,lat,lon),{mode:'cors'});
-    if(!r.ok)throw new Error();
-    const data=await r.json();
-    const v=Number(data.OutputData?.geoidHeight??data.geoidHeight);
-    if(!Number.isFinite(v))throw new Error();
-    cache[key]=v;writeJson(LS.geo,cache);return{height:v,source:'online'};
-  }catch{
-    throw new Error('ジオイド高を取得できません。ジオイドデータファイルが読み込まれているか確認してください。');
-  }
+  throw new Error('ジオイド高を取得できません。ページを再読込してジオイドデータの読込が完了してから変換してください。');
 }
 function buildGeoidUrl(model,lat,lon){const proxy=geoidProxyUrl();const qs=new URLSearchParams({model,latitude:lat.toFixed(8),longitude:lon.toFixed(8)});if(proxy)return `${proxy.replace(/\/$/,'')}?${qs}`;const directQs=new URLSearchParams({outputType:'json',latitude:lat.toFixed(8),longitude:lon.toFixed(8)});return `${GSI[model]}?${directQs}`}
 function geoidProxyUrl(){return (window.SURVEY_CONFIG?.geoidProxy||'').trim()}
