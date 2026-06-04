@@ -21,7 +21,7 @@ async function loadGeoid2011(){
       const vals=lines[i].trim().split(/\s+/);
       for(const v of vals){const n=parseFloat(v);data.push(n);}
     }
-    geoidData2011={lat0,lon0,dlat,dlon,nrows,ncols,data};
+    geoidData2011={lat0,lon0,dlat,dlon,nrows,ncols,data,southToNorth:false};
     console.log('Geoid2011 loaded:',lat0,lon0,dlat,dlon,nrows,ncols,'points:',data.length);
     return geoidData2011;
   }catch(e){console.error('loadGeoid2011 error:',e);return null;}
@@ -54,7 +54,7 @@ async function loadGeoid2024(){
       const vals=lines[i].trim().split(/\s+/);
       for(const v of vals){if(v!=='')data.push(parseFloat(v));}
     }
-    geoidData2024={lat0,lon0,dlat,dlon,nrows,ncols,data};
+    geoidData2024={lat0,lon0,dlat,dlon,nrows,ncols,data,southToNorth:true};
     console.log('Geoid2024 loaded:',lat0,lon0,dlat,dlon,nrows,ncols,'points:',data.length);
     return geoidData2024;
   }catch(e){console.error('loadGeoid2024 error:',e);return null;}
@@ -62,10 +62,19 @@ async function loadGeoid2024(){
 
 function interpolateGeoid(gd,lat,lon){
   if(!gd||!gd.data||gd.data.length===0)return NaN;
-  const {lat0,lon0,dlat,dlon,nrows,ncols,data}=gd;
-  const ri=(lat-lat0)/dlat;
+  const {lat0,lon0,dlat,dlon,nrows,ncols,data,southToNorth}=gd;
   const ci=(lon-lon0)/dlon;
-  if(ri<0||ri>nrows-1||ci<0||ci>ncols-1)return NaN;
+  if(ci<0||ci>ncols-1)return NaN;
+  let ri;
+  if(southToNorth){
+    // ISG: データは南(lat0)→北の順
+    ri=(lat-lat0)/dlat;
+  }else{
+    // ASC: データは北→南の順、lat0は南端
+    const latMax=lat0+dlat*(nrows-1);
+    ri=(latMax-lat)/dlat;
+  }
+  if(ri<0||ri>nrows-1)return NaN;
   const r0=Math.floor(ri),c0=Math.floor(ci);
   const r1=Math.min(r0+1,nrows-1),c1=Math.min(c0+1,ncols-1);
   const dr=ri-r0,dc=ci-c0;
