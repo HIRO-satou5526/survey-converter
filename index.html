@@ -1,0 +1,93 @@
+﻿<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="測量変換">
+  <title>土木・測量 座標標高変換</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/proj4@2.11.0/dist/proj4.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div><p class="eyebrow">Civil Survey PWA</p><h1>座標・標高変換</h1></div>
+      <div id="appStatus" class="status">起動中</div>
+    </header>
+
+    <nav class="tabs" aria-label="機能切替">
+      <button class="tab active" data-tab="convert">変換</button>
+      <button class="tab" data-tab="csv">CSV</button>
+      <button class="tab" data-tab="favorites">お気に入り</button>
+      <button class="tab" data-tab="settings">設定</button>
+    </nav>
+
+    <section id="convert" class="panel active">
+      <form id="convertForm" class="stack">
+        <div class="segmented two">
+          <label><input type="radio" name="mode" value="xy2ll" checked><span>XY → 緯度経度</span></label>
+          <label><input type="radio" name="mode" value="ll2xy"><span>緯度経度 → XY</span></label>
+        </div>
+
+        <div class="grid two">
+          <label>平面直角座標系<select id="zone"></select></label>
+          <label>測地成果<select id="datum"><option>JGD2011</option><option>JGD2000</option><option>JGD2024</option></select></label>
+        </div>
+
+        <div id="xyInputs" class="grid two">
+          <label>X座標 m<input id="x" type="number" inputmode="decimal" step="0.001" placeholder="-44551.436"></label>
+          <label>Y座標 m<input id="y" type="number" inputmode="decimal" step="0.001" placeholder="-16995.128"></label>
+        </div>
+
+        <div id="llInputs" class="grid two hidden">
+          <label>緯度<input id="lat" type="number" inputmode="decimal" step="0.00000001" placeholder="35.59828784"></label>
+          <label>経度<input id="lon" type="number" inputmode="decimal" step="0.00000001" placeholder="139.64576927"></label>
+        </div>
+
+        <div class="grid two">
+          <label>高さ入力方式<select id="heightType"><option value="h2011">標高（JGD2011）</option><option value="h2024">標高（JGD2024）</option><option value="ellipsoid">楕円体高</option></select></label>
+          <label>高さ m<input id="heightValue" type="number" inputmode="decimal" step="0.001" placeholder="11.642"></label>
+        </div>
+
+        <div class="actions">
+          <button class="primary" type="submit">変換</button>
+          <button type="button" id="gpsBtn">現在地取得</button>
+          <button type="button" id="saveFavoriteBtn">保存</button>
+        </div>
+      </form>
+
+      <section class="resultBox">
+        <div class="resultHead"><h2>変換結果</h2><button id="copyAllBtn" type="button">全コピー</button></div>
+        <div id="resultList" class="resultList empty">変換結果はこちらに表示されます</div>
+      </section>
+    </section>
+
+    <section id="csv" class="panel">
+      <div class="stack">
+        <label>CSV入力形式<select id="csvPattern"><option value="xy_h2011">X,Y,標高(JGD2011)</option><option value="xy_h2024">X,Y,標高(JGD2024)</option><option value="xy_ellipsoid">X,Y,楕円体高</option><option value="ll_h2011">緯度,経度,標高(JGD2011)</option><option value="ll_h2024">緯度,経度,標高(JGD2024)</option><option value="ll_ellipsoid">緯度,経度,楕円体高</option></select></label>
+        <textarea id="csvInput" rows="8" placeholder="1行1点。例&#10;-44551.436,-16995.128,11.642"></textarea>
+        <div class="actions"><button id="runCsvBtn" class="primary" type="button">CSV変換</button><button id="downloadCsvBtn" type="button">CSV保存</button></div>
+        <textarea id="csvOutput" rows="10" readonly placeholder="CSV結果"></textarea>
+      </div>
+    </section>
+
+    <section id="favorites" class="panel">
+      <div class="resultHead"><h2>保存地点</h2><button id="clearFavoritesBtn" type="button">全削除</button></div>
+      <div id="favoriteList" class="cards"></div>
+    </section>
+
+    <section id="settings" class="panel">
+      <div class="stack">
+        <label>地点名<input id="pointName" type="text" placeholder="現場名・基準点名"></label>
+        <div class="info"><strong>ジオイド取得優先順位</strong><br>1. アプリ内格子データ（同梱時） 2. LocalStorageキャッシュ 3. 国土地理院公開サービス</div>
+        <div class="info warn">GitHub Pages単体で完全オフライン高精度計算を行うには、ジオイド2011/2024の格子データを別途同梱してください。未同梱時は過去取得キャッシュまたはオンライン取得を使います。</div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

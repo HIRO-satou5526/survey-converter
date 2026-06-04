@@ -1,0 +1,1 @@
+﻿{"name":"土木・測量 座標標高変換","short_name":"測量変換","start_url":"./index.html","scope":"./","display":"standalone","background_color":"#111827","theme_color":"#111827","description":"平面直角座標、緯度経度、楕円体高、標高、ジオイド高を変換する現場向けPWA","icons":[{"src":"./icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
